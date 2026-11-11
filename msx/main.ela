@@ -1,0 +1,429 @@
+// Sand Runner: an original endless runner.
+// Jump: joystick up / fire A, or cursor-up / space.
+// Written in the portable subset, so `elara8 build` can export it.
+msx.screen.mode(1)
+msx.screen.color(15, 5, 5)
+msx.screen.cls()
+
+msx.sprite.set_size(16)
+msx.sprite.set_mag(1)
+msx.asset.load_sprites("runner.sprites", 0)
+msx.asset.load_tiles("runner.tiles", 48)
+
+// Tile colors come in groups of 8 ids.
+msx.tile.set_color(0, 0xF5)
+msx.tile.set_color(8, 0xAB)
+msx.tile.set_color(16, 0xAB)
+msx.tile.set_color(48, 0x15)
+msx.tile.set_color(56, 0x15)
+msx.tile.set_color(64, 0x15)
+
+msx.tile.fill(0, 20, 32, 1, 8)
+msx.tile.fill(0, 21, 32, 3, 16)
+
+const GROUND_Y = 144
+const JUMP_V = 0 - 10
+
+let py = GROUND_Y
+let vy = 0
+let air = 0
+let scroll = 0
+let tick = 0
+let speed = 3
+let cloud_a = 200
+let cloud_b = 90
+
+// Obstacle: kind 0 rock, 1 cactus, 2 double cactus.
+let oact = 0
+let ox = 0
+let okind = 0
+let gap = 60
+let seed = 1234
+
+// Score kept as four decimal digits (d3 is the thousands digit).
+let score = 0
+let d0 = 0
+let d1 = 0
+let d2 = 0
+let d3 = 0
+let score_tick = 0
+
+// Session high score (RAM only; survives attract/restart).
+let hi = 0
+let h0 = 0
+let h1 = 0
+let h2 = 0
+let h3 = 0
+
+// Sound effect: kind 1 jump blip, kind 2 hit buzz.
+let sfx_kind = 0
+let sfx_timer = 0
+let sfx_period = 0
+
+// 0 playing, 1 game over, 2 attract (the runner plays itself).
+let state = 2
+let dead_timer = 0
+
+// Rotate the bits of one pattern row left by s pixels.
+fn rot(v, s) {
+  return ((v << s) | (v >> (8 - s))) & 255
+}
+
+// Redraw the two ground tiles shifted by the current scroll offset.
+fn draw_ground() {
+  let s = scroll & 7
+  msx.tile.define(8, {rot(0xFF, s), rot(0x55, s), rot(0xAA, s), 0x00,
+    rot(0x20, s), 0x00, rot(0x04, s), 0x00})
+  msx.tile.define(16, {0x00, rot(0x20, s), 0x00, rot(0x04, s),
+    0x00, rot(0x80, s), 0x00, rot(0x10, s)})
+}
+
+fn draw_score() {
+  msx.tile.put(1, 1, 48 + d3)
+  msx.tile.put(2, 1, 48 + d2)
+  msx.tile.put(3, 1, 48 + d1)
+  msx.tile.put(4, 1, 48 + d0)
+}
+
+fn draw_hi() {
+  msx.tile.put(22, 1, 69)
+  msx.tile.put(23, 1, 68)
+  msx.tile.put(24, 1, 48 + h3)
+  msx.tile.put(25, 1, 48 + h2)
+  msx.tile.put(26, 1, 48 + h1)
+  msx.tile.put(27, 1, 48 + h0)
+}
+
+fn add_score() {
+  if score >= 9999 { return 0 }
+  score += 1
+  d0 += 1
+  if d0 == 10 {
+    d0 = 0
+    d1 += 1
+    if d1 == 10 {
+      d1 = 0
+      d2 += 1
+      if d2 == 10 {
+        d2 = 0
+        d3 += 1
+      }
+    }
+  }
+  if score == 300 { speed = 4 }
+  if score == 600 { speed = 5 }
+  if score == 900 { speed = 6 }
+  draw_score()
+}
+
+fn reset_score() {
+  score = 0
+  d0 = 0
+  d1 = 0
+  d2 = 0
+  d3 = 0
+  score_tick = 0
+  speed = 3
+  draw_score()
+}
+
+fn maybe_update_hi() {
+  if score > hi {
+    hi = score
+    h0 = d0
+    h1 = d1
+    h2 = d2
+    h3 = d3
+    draw_hi()
+  }
+}
+
+fn step_score() {
+  score_tick += 1
+  if score_tick == 6 {
+    score_tick = 0
+    add_score()
+  }
+}
+
+fn write_period(p) {
+  msx.psg.write(0, p & 255)
+  msx.psg.write(1, p >> 8)
+}
+
+fn start_sfx(kind) {
+  sfx_kind = kind
+  msx.psg.write(7, 0x3E)
+  if kind == 1 {
+    sfx_timer = 6
+    sfx_period = 0x180
+    msx.psg.write(8, 12)
+  } else {
+    sfx_timer = 20
+    sfx_period = 0x200
+    msx.psg.write(8, 15)
+  }
+  write_period(sfx_period)
+}
+
+fn step_sfx() {
+  if sfx_timer == 0 { return 0 }
+  sfx_timer -= 1
+  if sfx_timer == 0 {
+    msx.psg.mute()
+    return 0
+  }
+  if sfx_kind == 1 {
+    sfx_period -= 20
+  } else {
+    sfx_period += 32
+    msx.psg.write(8, 5 + (sfx_timer >> 1))
+  }
+  write_period(sfx_period)
+}
+
+// Autopilot for attract mode: jump when the obstacle is about five frames
+// from the runner.
+fn auto_jump() {
+  if oact == 0 { return 0 }
+  if ox <= 20 { return 0 }
+  if ox - 43 <= speed * 5 { return 1 }
+  return 0
+}
+
+fn jump_pressed() {
+  let joy = msx.input.joy(0)
+  if (joy & 17) != 0 { return 1 }
+  if msx.input.key_down(30) { return 1 }
+  if msx.input.key_down(32) { return 1 }
+  return 0
+}
+
+fn drift_clouds() {
+  if (tick & 1) == 0 {
+    cloud_a -= 1
+    cloud_b -= 1
+    if cloud_a <= 0 { cloud_a = 240 }
+    if cloud_b <= 0 { cloud_b = 240 }
+  }
+  msx.sprite.put(3, cloud_a, 40, 32, 15)
+  msx.sprite.put(4, cloud_b, 72, 32, 15)
+}
+
+fn want_jump() {
+  if state == 2 { return auto_jump() }
+  return jump_pressed()
+}
+
+fn put_runner(fill, outline) {
+  msx.sprite.put(0, 32, py, fill, 8)
+  msx.sprite.put(5, 32, py, outline, 1)
+}
+
+fn step_player() {
+  if air == 0 {
+    if want_jump() == 1 {
+      vy = JUMP_V
+      air = 1
+      start_sfx(1)
+    }
+  }
+  if air == 1 {
+    py += vy
+    vy += 1
+    if py >= GROUND_Y {
+      py = GROUND_Y
+      vy = 0
+      air = 0
+    }
+  }
+  let fill = 0
+  let outline = 4
+  if air == 0 {
+    let frame = (tick >> 2) & 1
+    fill = frame * 8
+    outline = 4 + frame * 8
+  }
+  put_runner(fill, outline)
+}
+
+fn clear_obstacle() {
+  oact = 0
+  msx.sprite.clear(1)
+  msx.sprite.clear(2)
+  msx.sprite.clear(6)
+  msx.sprite.clear(7)
+}
+
+fn put_cactus(plane_fill, plane_outline, x) {
+  msx.sprite.put(plane_fill, x, GROUND_Y, 16, 12)
+  msx.sprite.put(plane_outline, x, GROUND_Y, 36, 1)
+}
+
+fn next_random() {
+  seed = (seed * 25 + 13) & 0x7FFF
+}
+
+fn spawn_obstacle() {
+  next_random()
+  okind = (seed >> 8) % 3
+  ox = 240
+  oact = 1
+}
+
+fn step_obstacle() {
+  if oact == 0 {
+    gap -= 1
+    if gap <= 0 { spawn_obstacle() }
+    return 0
+  }
+  ox -= speed
+  if ox <= 0 {
+    clear_obstacle()
+    next_random()
+    gap = 30 + ((seed >> 4) & 31)
+    return 0
+  }
+  if okind == 0 {
+    msx.sprite.put(1, ox, GROUND_Y, 20, 14)
+    msx.sprite.clear(2)
+    msx.sprite.clear(6)
+    msx.sprite.clear(7)
+  } else {
+    put_cactus(1, 6, ox)
+    if okind == 2 {
+      put_cactus(2, 7, ox + 14)
+    } else {
+      msx.sprite.clear(2)
+      msx.sprite.clear(7)
+    }
+  }
+}
+
+// 1 when the runner overlaps the active obstacle.
+fn hit_obstacle() {
+  if oact == 0 { return 0 }
+  let bx1 = ox + 3
+  let bx2 = ox + 13
+  let by1 = GROUND_Y
+  if okind == 0 {
+    bx1 = ox + 2
+    bx2 = ox + 14
+    by1 = GROUND_Y + 8
+  }
+  if okind == 2 { bx2 = ox + 27 }
+  if 34 < bx2 {
+    if 46 > bx1 {
+      if py + 3 < GROUND_Y + 16 {
+        if py + 16 > by1 { return 1 }
+      }
+    }
+  }
+  return 0
+}
+
+fn show_game_over() {
+  msx.tile.put(11, 10, 58)
+  msx.tile.put(12, 10, 59)
+  msx.tile.put(13, 10, 60)
+  msx.tile.put(14, 10, 61)
+  msx.tile.put(16, 10, 62)
+  msx.tile.put(17, 10, 63)
+  msx.tile.put(18, 10, 61)
+  msx.tile.put(19, 10, 64)
+}
+
+fn show_press_fire() {
+  let t = 0
+  if ((tick >> 4) & 1) == 0 { t = 1 }
+  msx.tile.put(11, 12, t * 65)
+  msx.tile.put(12, 12, t * 64)
+  msx.tile.put(13, 12, t * 61)
+  msx.tile.put(14, 12, t * 66)
+  msx.tile.put(15, 12, t * 66)
+  msx.tile.put(17, 12, t * 67)
+  msx.tile.put(18, 12, t * 68)
+  msx.tile.put(19, 12, t * 64)
+  msx.tile.put(20, 12, t * 61)
+}
+
+fn restart() {
+  msx.tile.fill(11, 12, 10, 1, 0)
+  msx.tile.fill(11, 10, 9, 1, 0)
+  clear_obstacle()
+  py = GROUND_Y
+  vy = 0
+  air = 0
+  gap = 60
+  state = 0
+  sfx_timer = 0
+  msx.psg.mute()
+  reset_score()
+}
+
+// Back to the demo round: clear captions, reset the world, keep hi.
+fn enter_attract() {
+  msx.tile.fill(11, 12, 10, 1, 0)
+  msx.tile.fill(11, 10, 9, 1, 0)
+  clear_obstacle()
+  py = GROUND_Y
+  vy = 0
+  air = 0
+  gap = 60
+  state = 2
+  dead_timer = 0
+  sfx_timer = 0
+  msx.psg.mute()
+  reset_score()
+  put_runner(0, 4)
+}
+
+draw_score()
+draw_hi()
+
+while true {
+  if state == 1 {
+    dead_timer += 1
+    // No start for ~3 s: return to the autopilot demo.
+    if dead_timer >= 180 {
+      enter_attract()
+    } else {
+      if dead_timer >= 30 {
+        if jump_pressed() == 1 { restart() }
+      }
+    }
+  } else {
+    if state == 2 {
+      show_press_fire()
+      if jump_pressed() == 1 { restart() }
+    }
+    scroll += speed
+    tick += 1
+    draw_ground()
+    drift_clouds()
+    step_player()
+    step_obstacle()
+    if hit_obstacle() == 1 {
+      if state == 0 {
+        state = 1
+        dead_timer = 0
+        py = GROUND_Y
+        put_runner(24, 28)
+        maybe_update_hi()
+        show_game_over()
+        start_sfx(2)
+      } else {
+        // The autopilot misjudged: start the demo round again.
+        clear_obstacle()
+        py = GROUND_Y
+        vy = 0
+        air = 0
+        gap = 60
+      }
+    } else {
+      if state == 0 { step_score() }
+    }
+  }
+  step_sfx()
+  msx.time.wait_vblank()
+}

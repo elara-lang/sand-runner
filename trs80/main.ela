@@ -1,0 +1,303 @@
+// Sand Runner: jump rocks and cacti on the Model III cell grid.
+trs.screen.cls()
+trs.asset.load_stamps("runner.stamps", 0)
+
+// Platform at 13; runner is 2×2 cells (top at STAND, feet on STAND+1).
+let GROUND = 13
+let STAND = 11
+// Rise 5 cells (peak 6); 5 frames per cell — higher and less snappy than before.
+let HOP_CELLS = 5
+let HOP_HOLD = 5
+
+let py = STAND
+let hop = 0
+let fall_t = 0
+let air = 0
+let scroll = 0
+let tick = 0
+let speed = 1
+let cloud = 50
+
+let oact = 0
+let ox = 0
+let okind = 0
+let gap = 40
+let seed = 1234
+
+let score = 0
+let d0 = 0
+let d1 = 0
+let d2 = 0
+let d3 = 0
+let score_tick = 0
+
+let hi = 0
+let h0 = 0
+let h1 = 0
+let h2 = 0
+let h3 = 0
+
+let sfx_timer = 0
+let sfx_period = 0
+
+let state = 2
+let dead_timer = 0
+let blink = 0
+
+while true {
+  let joy = trs.input.joy(0)
+  let jump = joy & 1
+  let fire = (joy >> 4) & 1
+  if fire == 1 { jump = 1 }
+  if trs.input.key_down(30) { jump = 1 }
+  if trs.input.key_down(32) { jump = 1 }
+
+  if state == 1 {
+    dead_timer = dead_timer + 1
+    if dead_timer > 30 {
+      if jump == 1 {
+        state = 0
+        py = STAND
+        hop = 0
+        fall_t = 0
+        air = 0
+        oact = 0
+        gap = 40
+        score = 0
+        d0 = 0
+        d1 = 0
+        d2 = 0
+        d3 = 0
+        score_tick = 0
+        speed = 1
+        sfx_timer = 0
+        trs.sound.mute()
+      }
+      if dead_timer > 180 {
+        state = 2
+        py = STAND
+        hop = 0
+        fall_t = 0
+        air = 0
+        oact = 0
+        gap = 40
+        score = 0
+        d0 = 0
+        d1 = 0
+        d2 = 0
+        d3 = 0
+        score_tick = 0
+        speed = 1
+        sfx_timer = 0
+        trs.sound.mute()
+      }
+    }
+  }
+
+  if state == 2 {
+    if jump == 1 {
+      state = 0
+      py = STAND
+      hop = 0
+      fall_t = 0
+      air = 0
+      oact = 0
+      gap = 40
+      score = 0
+      d0 = 0
+      d1 = 0
+      d2 = 0
+      d3 = 0
+      score_tick = 0
+      speed = 1
+    }
+  }
+
+  if state == 0 {
+    if jump == 1 {
+      if air == 0 {
+        hop = HOP_CELLS
+        fall_t = HOP_HOLD - 1
+        air = 1
+        sfx_timer = 4
+        sfx_period = 40
+        trs.sound.tone(40)
+      }
+    }
+  }
+
+  if state == 2 {
+    if oact == 1 {
+      if ox < 14 {
+        if air == 0 {
+          hop = HOP_CELLS
+          fall_t = HOP_HOLD - 1
+          air = 1
+          sfx_timer = 4
+          sfx_period = 40
+          trs.sound.tone(40)
+        }
+      }
+    }
+  }
+
+  // One cell per HOP_HOLD frames: climb hop cells, then fall the same way.
+  if state != 1 {
+    if air == 1 {
+      fall_t = fall_t + 1
+      if fall_t >= HOP_HOLD {
+        fall_t = 0
+        if hop > 0 {
+          py = py - 1
+          hop = hop - 1
+        } else {
+          py = py + 1
+          if py >= STAND {
+            py = STAND
+            air = 0
+            fall_t = 0
+          }
+        }
+      }
+    }
+  }
+
+  scroll = scroll + speed
+  if scroll > 64 { scroll = scroll - 64 }
+
+  cloud = cloud - 1
+  if cloud < 0 { cloud = 58 }
+
+  if oact == 0 {
+    gap = gap - 1
+    if gap <= 0 {
+      oact = 1
+      ox = 60
+      seed = (seed * 25 + 13) & 32767
+      okind = (seed >> 13) & 1
+      gap = 30 + ((seed >> 8) & 31)
+    }
+  } else {
+    ox = ox - speed
+    if ox <= 0 {
+      oact = 0
+    }
+  }
+
+  if state == 0 {
+    if oact == 1 {
+      let hit = 0
+      // Runner 2×2 at cols 8..9; clear when feet above obstacles (py < 10).
+      if ox <= 9 {
+        if ox >= 7 {
+          if py >= 10 { hit = 1 }
+        }
+      }
+      if hit == 1 {
+        state = 1
+        dead_timer = 0
+        sfx_timer = 20
+        sfx_period = 80
+        trs.sound.tone(80)
+        if score > hi {
+          hi = score
+          h0 = d0
+          h1 = d1
+          h2 = d2
+          h3 = d3
+        }
+      }
+    }
+    score_tick = score_tick + 1
+    if score_tick == 6 {
+      score_tick = 0
+      if score < 9999 {
+        score = score + 1
+        d0 = d0 + 1
+        if d0 == 10 {
+          d0 = 0
+          d1 = d1 + 1
+          if d1 == 10 {
+            d1 = 0
+            d2 = d2 + 1
+            if d2 == 10 {
+              d2 = 0
+              d3 = d3 + 1
+            }
+          }
+        }
+        if score == 300 { speed = 2 }
+        if score == 600 { speed = 3 }
+      }
+    }
+  }
+
+  if sfx_timer > 0 {
+    sfx_timer = sfx_timer - 1
+    if sfx_timer == 0 { trs.sound.mute() }
+  }
+
+  trs.screen.cls()
+
+  let g = 0
+  while g < 64 {
+    let cell = 176 + (((scroll + g) & 1) * 15)
+    trs.screen.put(g, GROUND, cell)
+    g = g + 1
+  }
+
+  if cloud >= 0 {
+    if cloud < 61 {
+      trs.stamp.put(5, cloud, 3)
+    }
+  }
+
+  if oact == 1 {
+    if okind == 0 {
+      trs.stamp.put(4, ox, 12)
+    } else {
+      trs.stamp.put(3, ox, 11)
+    }
+  }
+
+  let run_stamp = 0
+  if state == 1 {
+    run_stamp = 2
+  } else {
+    if air == 1 {
+      run_stamp = 0
+    } else {
+      tick = tick + 1
+      if tick == 8 { tick = 0 }
+      if tick >= 4 { run_stamp = 1 }
+    }
+  }
+  trs.stamp.put(run_stamp, 8, py)
+
+  trs.screen.print(1, 0, "SCORE")
+  trs.screen.put(7, 0, 48 + d3)
+  trs.screen.put(8, 0, 48 + d2)
+  trs.screen.put(9, 0, 48 + d1)
+  trs.screen.put(10, 0, 48 + d0)
+  trs.screen.print(52, 0, "HI")
+  trs.screen.put(55, 0, 48 + h3)
+  trs.screen.put(56, 0, 48 + h2)
+  trs.screen.put(57, 0, 48 + h1)
+  trs.screen.put(58, 0, 48 + h0)
+
+  if state == 2 {
+    blink = blink + 1
+    if blink == 32 { blink = 0 }
+    if blink < 16 {
+      trs.screen.print(27, 6, "PRESS FIRE")
+    }
+  }
+
+  if state == 1 {
+    if dead_timer > 30 {
+      trs.screen.print(27, 6, "GAME OVER")
+    }
+  }
+
+  trs.time.wait_frame()
+}

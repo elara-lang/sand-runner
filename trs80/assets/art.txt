@@ -1,0 +1,53 @@
+# Sand Runner — art for TRS-80 2×3 block cells (2 wide × 3 tall per char).
+# Confirmed: Model III graphics chars 128..191 are a 2×3 squot matrix
+# (128×48 SET/RESET space = 64×16 cells × 2×3). Not 3×2.
+# Regenerate (from repo root):
+#   make assets trs80
+#   assetkit --target trs80 encode trs80/assets/art.txt \
+#     --stamps trs80/assets/runner.stamps
+
+# Runner 4×6 (2×2 cells): head, torso, running legs (side view).
+stamp runner_a
+.##.
+####
+.#.#
+##..
+#.#.
+#..#
+
+stamp runner_b
+.##.
+####
+#.#.
+..##
+.#.#
+..#.
+
+stamp runner_fallen
+....
+####
+####
+.##.
+#..#
+....
+
+# Cactus 2×6 (1×2): trunk.
+stamp cactus
+##
+##
+##
+##
+##
+##
+
+# Rock 4×3 (2×1): low boulder.
+stamp rock
+.###
+####
+##.#
+
+# Cloud 6×3 (3×1): flat fluff.
+stamp cloud
+.####.
+######
+.####.
